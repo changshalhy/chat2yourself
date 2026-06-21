@@ -1,6 +1,6 @@
 [package]
 name = "chat2yourself"
-version = "0.0.0"
+version = "0.5.5"
 description = "A warm local self-interview tool."
 authors = ["Chat2Yourself"]
 edition = "2021"
