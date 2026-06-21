@@ -1,30 +1,33 @@
 # Desktop Packaging
 
-V5 adds a Tauri desktop shell around the existing Vite app. V5.2 adds a
-versioned JSON backup and restore flow for all browser-local sessions. V5.3
-adds full-text session search, progress filters, and library sorting. V5.4 adds
-a local review center for clarity trends, recurring themes, and tiny actions.
-V5.5 adds review date ranges, a cross-session action queue, and Markdown review
-exports.
+V5 added a Tauri desktop shell around the existing Vite app. V5.2 added
+versioned JSON backup and restore. V5.3 added full-text library search. V5.4
+added the local review center. V5.5 added review date ranges and Markdown
+review exports.
+
+V0.6 is the first Windows desktop-ready pass: production desktop builds call the
+model through Tauri commands and store model configuration in a local user
+config file instead of requiring a separate Express process.
 
 ## Current Shape
 
-- `npm run dev` runs the existing local Express API and Vite web app.
-- `npm run desktop:dev` starts Tauri and points the desktop window at the Vite dev URL.
-- `npm run desktop:build` asks Tauri to build a Windows desktop bundle from `dist`.
-- `npm run desktop:preflight` checks whether the local machine has the needed desktop toolchain.
-- The sidebar can back up every local session and restore either a V5.2 backup
-  or a JSON file exported from a single session.
-- The local library can search titles, conversations, reports, and tiny actions,
-  then filter by report, favorite, or pending-action state.
-- The review center aggregates local sessions without sending summary data to a
-  remote service.
-- Review exports contain aggregate statistics, themes, actions, and session
-  metadata, but omit full conversation transcripts.
+- `npm run dev` runs the Web development mode: local Express API plus Vite.
+- `npm run desktop:dev` starts Tauri and uses the Vite dev URL.
+- `npm run desktop:build` asks Tauri to build a Windows desktop bundle from
+  `dist`.
+- `npm run desktop:preflight` checks whether the local machine has the needed
+  desktop toolchain.
+- Desktop mode saves model config to `%APPDATA%\Chat2Yourself\config.json` on
+  Windows.
+- Desktop mode never writes API keys into `localStorage`; only the Tauri backend
+  reads and writes the config file.
+- Web development mode still reads `DEEPSEEK_API_KEY`,
+  `DEEPSEEK_BASE_URL`, and `DEEPSEEK_MODEL` from `.env`.
 
 ## Requirements
 
-Install the Windows prerequisites from the official Tauri docs before expecting a real `.exe` build:
+Install the Windows prerequisites from the official Tauri docs before expecting
+a real `.exe` build:
 
 - Microsoft C++ Build Tools
 - WebView2
@@ -32,8 +35,20 @@ Install the Windows prerequisites from the official Tauri docs before expecting 
 
 ## API Key
 
-Do not bake a shared DeepSeek key into the desktop app. During this prep stage, the app still reads `DEEPSEEK_API_KEY` from local environment configuration.
+Do not bake a shared DeepSeek key into the desktop app. Users should enter their
+own API key in the desktop configuration screen. The saved config file contains
+the key and should not be shared.
 
-## Known V5 Limitation
+## Build Verification
 
-The Tauri shell is wired, but this version still relies on the existing local Express API for model calls. A later hardening pass should move the DeepSeek call behind a Tauri command or a packaged local sidecar before distributing the app to non-developers.
+Run these before publishing a release:
+
+```powershell
+npm run build
+npm run desktop:preflight
+npm run desktop:build
+```
+
+`npm run build` verifies TypeScript and the Vite production build. The desktop
+build additionally verifies the Rust/Tauri runtime and creates the Windows
+bundle when the local toolchain is complete.

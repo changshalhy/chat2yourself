@@ -18,6 +18,8 @@ body {
 }
 
 button,
+input,
+select,
 textarea {
   font: inherit;
 }
@@ -54,6 +56,74 @@ button:disabled {
   background: rgba(255, 252, 246, 0.92);
   box-shadow: 0 20px 60px rgba(46, 37, 25, 0.12);
   overflow: hidden;
+}
+
+.setupScreen {
+  display: grid;
+  gap: 22px;
+  width: min(560px, 100%);
+  margin: 0 auto;
+  border: 1px solid #ded6c8;
+  border-radius: 8px;
+  padding: 30px;
+  background: rgba(255, 252, 246, 0.96);
+  box-shadow: 0 20px 60px rgba(46, 37, 25, 0.12);
+}
+
+.setupHeader p:last-child {
+  margin: 12px 0 0;
+  color: #5f5448;
+  line-height: 1.55;
+}
+
+.configForm {
+  display: grid;
+  gap: 14px;
+}
+
+.configForm label {
+  display: grid;
+  gap: 7px;
+  color: #4d453b;
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+
+.configForm input {
+  width: 100%;
+  min-height: 42px;
+  border: 1px solid #d7cbbb;
+  border-radius: 7px;
+  padding: 0 12px;
+  color: #332d24;
+  background: #fffdf8;
+  outline: 0;
+}
+
+.configForm input:focus {
+  border-color: #6d969c;
+  box-shadow: 0 0 0 2px rgba(109, 150, 156, 0.16);
+}
+
+.configPath {
+  margin: 0;
+  overflow: hidden;
+  color: #75634b;
+  font-size: 0.82rem;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.configActions,
+.configInlineActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.configActions {
+  justify-content: flex-end;
 }
 
 .sidebar {
@@ -222,6 +292,10 @@ h2 {
   color: #8a2f22;
   font-size: 0.84rem;
   line-height: 1.45;
+}
+
+.configInlineActions {
+  margin-top: 10px;
 }
 
 .dataPanel {

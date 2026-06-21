@@ -1,4 +1,5 @@
 import { ChangeEvent, FormEvent, KeyboardEvent, useEffect, useMemo, useRef, useState } from 'react';
+import { createAiClient, normalizeAiError, RuntimeInfo, SaveModelConfigInput } from './aiClient';
 
 type ChatRole = 'user' | 'assistant';
 
@@ -76,8 +77,11 @@ type DataNotice = {
 
 type ApiHealth = {
   state: 'checking' | 'online' | 'offline';
+  mode?: RuntimeInfo['mode'];
+  baseUrl?: string;
   model?: string;
   hasApiKey?: boolean;
+  configPath?: string;
   checkedAt?: string;
   message?: string;
 };
@@ -91,6 +95,9 @@ const STORAGE_KEY = 'chat2yourself.sessions.v1';
 const BACKUP_FORMAT = 'chat2yourself-backup';
 const BACKUP_VERSION = 1;
 const MAX_BACKUP_BYTES = 5 * 1024 * 1024;
+const DEFAULT_BASE_URL = 'https://api.deepseek.com';
+const DEFAULT_MODEL = 'deepseek-v4-pro';
+const aiClient = createAiClient();
 
 const interviewStages: InterviewStage[] = [
   { id: 'arrival', name: '入场校准', hint: '先落地，找到今天最想看的那一团。' },
@@ -116,6 +123,13 @@ function App() {
   const [error, setError] = useState<string | null>(null);
   const [reportError, setReportError] = useState<string | null>(null);
   const [apiHealth, setApiHealth] = useState<ApiHealth>({ state: 'checking' });
+  const [configDraft, setConfigDraft] = useState<SaveModelConfigInput>({
+    apiKey: '',
+    baseUrl: DEFAULT_BASE_URL,
+    model: DEFAULT_MODEL
+  });
+  const [configNotice, setConfigNotice] = useState<DataNotice | null>(null);
+  const [isSavingConfig, setIsSavingConfig] = useState(false);
   const [dataNotice, setDataNotice] = useState<DataNotice | null>(null);
   const [sessionQuery, setSessionQuery] = useState('');
   const [sessionFilter, setSessionFilter] = useState<SessionFilter>('all');
@@ -235,6 +249,9 @@ function App() {
   const isSending = sendingSessionId !== null;
   const isReporting = reportingSessionId !== null;
   const isBusy = isSending || isReporting;
+  const isDesktopMode = apiHealth.mode === 'desktop' || aiClient.mode === 'desktop';
+  const needsDesktopConfig = isDesktopMode && apiHealth.state !== 'checking' && !apiHealth.hasApiKey;
+  const isAppLocked = isBusy || isSavingConfig || needsDesktopConfig;
   const activeIsSending = sendingSessionId === activeSession?.id;
   const activeIsReporting = reportingSessionId === activeSession?.id;
 
@@ -250,24 +267,28 @@ function App() {
     setApiHealth((current) => ({ ...current, state: 'checking' }));
 
     try {
-      const response = await fetch('/api/health');
-      const payload = await response.json().catch(() => null);
-
-      if (!response.ok || !payload?.ok) {
-        throw new Error(payload?.error ?? '后端健康检查没有通过。');
-      }
+      const runtimeInfo = await aiClient.health();
 
       setApiHealth({
         state: 'online',
-        model: typeof payload.model === 'string' ? payload.model : undefined,
-        hasApiKey: Boolean(payload.hasApiKey),
+        mode: runtimeInfo.mode,
+        baseUrl: runtimeInfo.baseUrl,
+        model: runtimeInfo.model,
+        hasApiKey: runtimeInfo.hasApiKey,
+        configPath: runtimeInfo.configPath,
         checkedAt: new Date().toISOString()
       });
+      setConfigDraft((current) => ({
+        ...current,
+        baseUrl: runtimeInfo.baseUrl || current.baseUrl || DEFAULT_BASE_URL,
+        model: runtimeInfo.model || current.model || DEFAULT_MODEL
+      }));
     } catch (caughtError) {
       setApiHealth({
         state: 'offline',
+        mode: aiClient.mode,
         checkedAt: new Date().toISOString(),
-        message: caughtError instanceof Error ? caughtError.message : '无法连接本地后端。'
+        message: normalizeAiError(caughtError)
       });
     }
   }
@@ -307,20 +328,10 @@ function App() {
     setSendingSessionId(sessionId);
 
     try {
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          stage: activeSession.stageId,
-          messages: nextMessages.map(({ role, content }) => ({ role, content }))
-        })
+      const payload = await aiClient.chat({
+        stage: activeSession.stageId,
+        messages: nextMessages.map(({ role, content }) => ({ role, content }))
       });
-
-      const payload = await response.json().catch(() => null);
-
-      if (!response.ok) {
-        throw new Error(payload?.error ?? '这次没有发出去。');
-      }
 
       const assistantContent = payload?.message?.content;
       if (typeof assistantContent !== 'string' || assistantContent.trim().length === 0) {
@@ -340,7 +351,7 @@ function App() {
         updatedAt: assistantMessage.createdAt
       })));
     } catch (caughtError) {
-      setError(caughtError instanceof Error ? caughtError.message : '发生了未知错误。');
+      setError(normalizeAiError(caughtError));
       setState((current) => updateSession(current, sessionId, (session) => ({
         ...session,
         messages: session.messages.filter((message) => message.id !== userMessage.id),
@@ -363,20 +374,10 @@ function App() {
     setReportingSessionId(sessionId);
 
     try {
-      const response = await fetch('/api/report', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          stage: activeSession.stageId,
-          messages: activeSession.messages.map(({ role, content }) => ({ role, content }))
-        })
+      const payload = await aiClient.generateReport({
+        stage: activeSession.stageId,
+        messages: activeSession.messages.map(({ role, content }) => ({ role, content }))
       });
-
-      const payload = await response.json().catch(() => null);
-
-      if (!response.ok) {
-        throw new Error(payload?.error ?? '这次没有生成报告。');
-      }
 
       const report = normalizeIncomingReport(payload?.report, activeSession.stageId);
       const now = new Date().toISOString();
@@ -391,7 +392,7 @@ function App() {
         updatedAt: now
       })));
     } catch (caughtError) {
-      setReportError(caughtError instanceof Error ? caughtError.message : '报告生成时发生了未知错误。');
+      setReportError(normalizeAiError(caughtError));
     } finally {
       setReportingSessionId(null);
     }
@@ -401,6 +402,79 @@ function App() {
     if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
       event.preventDefault();
       void handleSubmit();
+    }
+  }
+
+  async function saveDesktopConfig(event?: FormEvent<HTMLFormElement>) {
+    event?.preventDefault();
+
+    if (!aiClient.saveModelConfig) {
+      return;
+    }
+
+    const apiKey = configDraft.apiKey.trim();
+    if (!apiKey) {
+      setConfigNotice({ tone: 'error', message: '请先填写 API Key。' });
+      return;
+    }
+
+    setIsSavingConfig(true);
+    setConfigNotice(null);
+
+    try {
+      const runtimeInfo = await aiClient.saveModelConfig({
+        apiKey,
+        baseUrl: configDraft.baseUrl?.trim() || DEFAULT_BASE_URL,
+        model: configDraft.model?.trim() || DEFAULT_MODEL
+      });
+      setApiHealth({
+        state: 'online',
+        mode: runtimeInfo.mode,
+        baseUrl: runtimeInfo.baseUrl,
+        model: runtimeInfo.model,
+        hasApiKey: runtimeInfo.hasApiKey,
+        configPath: runtimeInfo.configPath,
+        checkedAt: new Date().toISOString()
+      });
+      setConfigDraft({ apiKey: '', baseUrl: runtimeInfo.baseUrl, model: runtimeInfo.model });
+      setConfigNotice({ tone: 'success', message: '配置已保存到本机，并通过连接测试。' });
+    } catch (caughtError) {
+      setConfigNotice({ tone: 'error', message: normalizeAiError(caughtError) });
+    } finally {
+      setIsSavingConfig(false);
+    }
+  }
+
+  async function clearDesktopConfig() {
+    if (!aiClient.clearModelConfig || isSavingConfig) {
+      return;
+    }
+
+    const ok = window.confirm('清除本机保存的模型配置？清除后需要重新填写 API Key。');
+    if (!ok) {
+      return;
+    }
+
+    setIsSavingConfig(true);
+    setConfigNotice(null);
+
+    try {
+      const runtimeInfo = await aiClient.clearModelConfig();
+      setApiHealth({
+        state: 'online',
+        mode: runtimeInfo.mode,
+        baseUrl: runtimeInfo.baseUrl,
+        model: runtimeInfo.model,
+        hasApiKey: runtimeInfo.hasApiKey,
+        configPath: runtimeInfo.configPath,
+        checkedAt: new Date().toISOString()
+      });
+      setConfigDraft({ apiKey: '', baseUrl: runtimeInfo.baseUrl, model: runtimeInfo.model });
+      setConfigNotice({ tone: 'success', message: '已清除本机模型配置。' });
+    } catch (caughtError) {
+      setConfigNotice({ tone: 'error', message: normalizeAiError(caughtError) });
+    } finally {
+      setIsSavingConfig(false);
     }
   }
 
@@ -741,21 +815,87 @@ function App() {
     return null;
   }
 
+  if (needsDesktopConfig) {
+    return (
+      <main className="shell">
+        <section className="setupScreen" aria-label="桌面模型配置">
+          <div className="setupHeader">
+            <p className="eyebrow">Chat2Yourself · V0.6</p>
+            <h1>保存本机模型配置</h1>
+            <p>
+              桌面版会把 API Key、Base URL 和模型名写入当前 Windows 用户的应用配置文件，不会放进访谈记录或浏览器 localStorage。
+            </p>
+          </div>
+
+          <form className="configForm" onSubmit={(event) => void saveDesktopConfig(event)}>
+            <label>
+              <span>API Key</span>
+              <input
+                autoComplete="off"
+                onChange={(event) => setConfigDraft((current) => ({ ...current, apiKey: event.target.value }))}
+                placeholder="sk-..."
+                type="password"
+                value={configDraft.apiKey}
+              />
+            </label>
+            <label>
+              <span>Base URL</span>
+              <input
+                onChange={(event) => setConfigDraft((current) => ({ ...current, baseUrl: event.target.value }))}
+                placeholder={DEFAULT_BASE_URL}
+                type="url"
+                value={configDraft.baseUrl}
+              />
+            </label>
+            <label>
+              <span>Model</span>
+              <input
+                onChange={(event) => setConfigDraft((current) => ({ ...current, model: event.target.value }))}
+                placeholder={DEFAULT_MODEL}
+                type="text"
+                value={configDraft.model}
+              />
+            </label>
+
+            {configNotice ? (
+              <p className={`dataNotice ${configNotice.tone}`} role={configNotice.tone === 'error' ? 'alert' : 'status'}>
+                {configNotice.message}
+              </p>
+            ) : null}
+
+            {apiHealth.configPath ? <p className="configPath">配置文件：{apiHealth.configPath}</p> : null}
+
+            <div className="configActions">
+              <button className="primaryButton" type="submit" disabled={isSavingConfig}>
+                {isSavingConfig ? '测试中...' : '保存并测试连接'}
+              </button>
+              <button className="ghostButton" type="button" onClick={() => void checkApiHealth()} disabled={isSavingConfig}>
+                重查
+              </button>
+            </div>
+          </form>
+        </section>
+      </main>
+    );
+  }
+
   return (
     <main className="shell">
       <section className="workspace" aria-label="自我访谈工作区">
         <aside className="sidebar" aria-label="本地会话列表">
           <div className="sidebarHeader">
             <div>
-              <p className="eyebrow">Chat2Yourself · V5.5</p>
+              <p className="eyebrow">Chat2Yourself · V0.6</p>
               <h1>本地访谈</h1>
             </div>
-            <button className="iconButton" type="button" onClick={createNewSession} disabled={isBusy} title="新建访谈">
+            <button className="iconButton" type="button" onClick={createNewSession} disabled={isAppLocked} title="新建访谈">
               +
             </button>
           </div>
 
-          <p className="localNotice">记录只保存在这台电脑的当前浏览器里。</p>
+          <p className="localNotice">
+            {isDesktopMode ? '访谈记录保存在本机，模型配置保存在当前 Windows 用户配置文件。' : '记录只保存在这台电脑的当前浏览器里。'}
+          </p>
 
           <div className="viewSwitch" aria-label="工作区视图">
             <button
@@ -788,8 +928,16 @@ function App() {
             </div>
             <dl className="statusList">
               <div>
+                <dt>模式</dt>
+                <dd>{isDesktopMode ? '桌面' : 'Web'}</dd>
+              </div>
+              <div>
                 <dt>模型</dt>
                 <dd>{apiHealth.model ?? '未连接'}</dd>
+              </div>
+              <div>
+                <dt>地址</dt>
+                <dd>{apiHealth.baseUrl ?? DEFAULT_BASE_URL}</dd>
               </div>
               <div>
                 <dt>Key</dt>
@@ -803,9 +951,29 @@ function App() {
             {apiHealth.state === 'offline' || apiHealth.hasApiKey === false ? (
               <p className="statusHint">
                 {apiHealth.state === 'offline'
-                  ? apiHealth.message ?? '请确认 npm run dev 正在运行。'
-                  : '请在本地 .env 配置 DEEPSEEK_API_KEY 后重启服务。'}
+                  ? apiHealth.message ?? (isDesktopMode ? '请检查本机模型配置。' : '请确认 npm run dev 正在运行。')
+                  : isDesktopMode
+                    ? '请保存本机模型配置后继续。'
+                    : '请在本地 .env 配置 DEEPSEEK_API_KEY 后重启服务。'}
               </p>
+            ) : null}
+            {isDesktopMode ? (
+              <div className="configInlineActions">
+                <button
+                  className="miniButton"
+                  type="button"
+                  onClick={() => {
+                    setApiHealth((current) => ({ ...current, hasApiKey: false }));
+                    setConfigNotice(null);
+                  }}
+                  disabled={isSavingConfig}
+                >
+                  修改配置
+                </button>
+                <button className="miniButton danger" type="button" onClick={() => void clearDesktopConfig()} disabled={isSavingConfig}>
+                  清除配置
+                </button>
+              </div>
             ) : null}
           </section>
 
