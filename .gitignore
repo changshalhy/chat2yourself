@@ -1,0 +1,8 @@
+node_modules
+dist
+server/dist
+.env
+.agents/
+src-tauri/target/
+.DS_Store
+*.log

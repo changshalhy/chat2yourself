@@ -1,0 +1,12 @@
+[package]
+name = "chat2yourself"
+version = "0.0.0"
+description = "A warm local self-interview tool."
+authors = ["Chat2Yourself"]
+edition = "2021"
+
+[build-dependencies]
+tauri-build = { version = "2", features = [] }
+
+[dependencies]
+tauri = { version = "2", features = [] }
